@@ -4,6 +4,7 @@ import traceback
 import asyncio
 import discord
 import win_unicode_console
+from random import choice
 
 from discord import utils
 from discord.enums import ChannelType
