@@ -535,6 +535,18 @@ class MusicBot(discord.Client):
                 raise CommandError(
                     'Unreasonable volume provided: {}%. Provide a value between 1 and 100.'.format(new_volume))
 
+    async def handle_eight(self, channel):
+        """
+        Usage {command_prefix}eight
+        returns 8ball answer.
+        """
+        ball = ["As I see it, yes", "It is certain", "It is decidedly so", "Most likely", "Outlook good", "Signs point to yes", "Without a doubt", "Yes", "Yes – definitely", "You may rely on it", "Reply hazy, try again", "Ask again later", "Better not tell you now", "Cannot predict now", "Concentrate and ask again", "Don't count on it", "My reply is no", "My sources say no", "Outlook not so good", "Very doubtful"]
+        
+        message = choice(ball)
+        return Response(message, reply=True)
+        
+	    
+
     async def handle_queue(self, channel):
         """
         Usage {command_prefix}queue
