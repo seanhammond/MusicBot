@@ -1,8 +1,11 @@
 import time
+import logging
 import inspect
 import traceback
 import asyncio
+import aiohttp
 import discord
+import dataIO
 import win_unicode_console
 from random import choice
 
@@ -536,9 +539,9 @@ class MusicBot(discord.Client):
                 raise CommandError(
                     'Unreasonable volume provided: {}%. Provide a value between 1 and 100.'.format(new_volume))
 
-    async def handle_eight(self, channel):
+    async def handle_8(self, channel):
         """
-        Usage {command_prefix}eight
+        Usage {command_prefix}8
         returns 8ball answer.
         """
         ball = ["As I see it, yes", "It is certain", "It is decidedly so", "Most likely", "Outlook good", "Signs point to yes", "Without a doubt", "Yes", "Yes – definitely", "You may rely on it", "Reply hazy, try again", "Ask again later", "Better not tell you now", "Cannot predict now", "Concentrate and ask again", "Don't count on it", "My reply is no", "My sources say no", "Outlook not so good", "Very doubtful"]
@@ -546,7 +549,81 @@ class MusicBot(discord.Client):
         message = choice(ball)
         return Response(message, reply=True)
         
-	    
+    async def handle_twitchalert(self, message, username):
+        global twitchStreams
+        twitchStreams = dataIO.fileIO("json/twitch.json", "load")
+        added = False
+        user_id = extract_user_id(username)
+        if True:
+            msg = message.content.split(" ")
+            if len(msg) == 2:
+                for i, stream in enumerate(twitchStreams):
+                    if stream["NAME"] == msg[1] and message.channel.id in stream["CHANNELS"]:
+                        fmsg = "`I'm already monitoring that stream in this channel.`"
+                        return False
+                for stream in twitchStreams:
+                    if stream["NAME"] == msg[1] and message.channel.id not in stream["CHANNELS"]: # twitchAlert is already monitoring this streamer but not in this channel
+                        twitchStreams[i]["CHANNELS"].append(message.channel.id)
+                        added = True
+                if not added: # twitchAlert wasn't monitoring this streamer
+                    twitchStreams.append({"CHANNELS" : [message.channel.id], "NAME" : msg[1], "ALREADY_ONLINE" : False})
+
+                dataIO.fileIO("json/twitch.json", "save", twitchStreams)
+                fmsg = "`I will always send an alert in this channel whenever {}'s stream is online. Use !stoptwitchalert [name] to stop it.`".format(msg[1])
+            else:
+               fmsg = "`!twitchalert [name]`"
+        else:
+            fmsg = "`I don't take orders from you.`"
+        return Response(fmsg, reply=True)
+
+    async def hande_stoptwitchalert(self, message):
+        global twitchStreams
+        twitchStreams = dataIO.fileIO("json/twitch.json", "load")
+        if isMemberAdmin(message):
+            msg = message.content.split(" ")
+            if len(msg) == 2:
+                for i, stream in enumerate(twitchStreams):
+                    if stream["NAME"] == msg[1] and message.channel.id in stream["CHANNELS"]:
+                        if len(stream["CHANNELS"]) == 1:
+                            twitchStreams.remove(stream)
+                        else:
+                            twitchStreams[i]["CHANNELS"].remove(message.channel.id)
+                        dataIO.fileIO("json/twitch.json", "save", twitchStreams)
+                        fmsg = "`I will stop sending alerts about {}'s stream in this channel.`".format(msg[1])
+                        return True
+                fmsg = "`There's no alert for {}'s stream in this channel.`".format(msg[1])
+            else:
+                fmsg = "`!stoptwitchalert [name]`"
+        else:
+           fsmg = "`I don't take orders from you.`"
+        return Response(fmsg, reply=True)
+        
+    async def handle_twitch(self, message, channel):
+        """
+        Usage {command_prefix}twitch
+        checks if twitch stream is online
+        """
+        msg = message.content.split()
+        if len(msg) == 2:
+            try:
+                url =  "https://api.twitch.tv/kraken/streams/" + msg[1]
+                async with aiohttp.get(url) as r:
+                    data = await r.json()
+                if "error" in data:
+                    fmsg = "`There is no streamer named {}`".format(msg[1])
+                elif "stream" in data:
+                    if data["stream"] != None:
+                        fmsg = "`{} is online!` {}".format(msg[1], "http://www.twitch.tv/" + msg[1])
+                    else:
+                        fmsg = "`{} is offline.`".format(msg[1])
+                else:
+                    fmsg = "`There is no streamer named {}`".format(msg[1])
+            except:
+                fmsg = "{} `Error.`"
+        else:
+            fsmg = "{} `!twitch [stream]`"
+        return Response(fmsg, reply=True)
+        
 
     async def handle_queue(self, channel):
         """
@@ -694,10 +771,81 @@ class MusicBot(discord.Client):
             await self.send_message(message.channel, '```\n%s\n```' % traceback.format_exc())
             traceback.print_exc()
 
+    @asyncio.coroutine
+    async def twitchAlert():
+        global twitchStreams
+        twitchStreams = dataIO.fileIO("json/twitch.json", "load")
+        CHECK_DELAY = 10
+        while True:
+            if twitchStreams and client.is_logged_in:
+                to_delete = []
+                save = False
+                consistency_check = twitchStreams
+                for i, stream in enumerate(twitchStreams):
+                    if twitchStreams == consistency_check: #prevents buggy behavior if twitchStreams gets modified during the iteration
+                        try:
+                            url =  "https://api.twitch.tv/kraken/streams/" + stream["NAME"]
+                            async with aiohttp.get(url) as r:
+                                data = await r.json()
+                            if "status" in data: 
+                                if data["status"] == 404: #Stream doesn't exist, remove from list
+                                    to_delete.append(stream)
+                            elif "stream" in data:
+                                if data["stream"] != None:
+                                    if not stream["ALREADY_ONLINE"]:
+                                        for channel in stream["CHANNELS"]:
+                                            try:
+                                                await client.send_message(client.get_channel(channel), "`{} is online!` {}".format(stream["NAME"], "http://www.twitch.tv/" + stream["NAME"]))
+                                            except: #In case of missing permissions
+                                                pass
+                                        twitchStreams[i]["ALREADY_ONLINE"] = True
+                                        save = True
+                                else:
+                                    if stream["ALREADY_ONLINE"]:
+                                        twitchStreams[i]["ALREADY_ONLINE"] = False
+                                        save = True
+                        except Exception as e:
+                            logger.warning(e)
 
+                        if save: #Saves online status, in case the bot needs to be restarted it can prevent message spam
+                            dataIO.fileIO("json/twitch.json", "save", twitchStreams)
+                            save = False
+
+                        await asyncio.sleep(CHECK_DELAY)
+                    else:
+                        break
+
+                if to_delete:
+                    for invalid_stream in to_delete:
+                        twitchStreams.remove(invalid_stream)
+                    dataIO.fileIO("json/twitch.json", "save", twitchStreams)
+            else:
+                await asyncio.sleep(5)
+
+				
+def loadDataFromFiles(loadsettings=False):
+	global twitchStreams
+	twitchStreams = dataIO.fileIO("json/twitch.json", "load")
+	logger.info("Loaded " + str(len(twitchStreams)) + " streams to monitor.")
+
+	if loadsettings:
+		global settings
+		settings = dataIO.fileIO("json/settings.json", "load")
+		
 if __name__ == '__main__':
+    global logger
+    logger = loggerSetup()
+    dataIO.logger = logger
+
+    dataIO.migration()
+    dataIO.createEmptyFiles()
+
+    settings = dataIO.loadAndCheckSettings()
+
+    loadDataFromFiles()
     bot = MusicBot()
     bot.run()
+    loop.create_task(twitchAlert())
 
 
 '''
